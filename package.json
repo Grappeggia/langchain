@@ -1,0 +1,22 @@
+{
+  "name": "langchain-fastapi",
+  "version": "1.0.0",
+  "description": "A basic LangChain application with Vercel zero config FastAPI support",
+  "scripts": {
+    "dev": "python api/index.py",
+    "test": "python example_client.py"
+  },
+  "keywords": [
+    "langchain",
+    "fastapi",
+    "vercel",
+    "openai",
+    "api"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "engines": {
+    "node": "22.x"
+  }
+}
+
