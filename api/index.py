@@ -4,6 +4,7 @@ Vercel Zero Config FastAPI Support with Vercel AI Gateway Integration
 """
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -234,14 +235,23 @@ async def query(request: QueryRequest):
                 new_lines.append(line)
             code = "\n".join(new_lines)
 
-            # Capture last expression for fallback evaluation
+            # Capture last expression and last assignment targets for fallback evaluation
             last_expr_src: Optional[str] = None
+            last_assign_vars: List[str] = []
             try:
                 sanitized_tree = ast.parse(code)
                 if sanitized_tree.body and isinstance(sanitized_tree.body[-1], ast.Expr):
                     last_expr = sanitized_tree.body[-1].value
                     if hasattr(ast, 'unparse'):
                         last_expr_src = ast.unparse(last_expr)
+                # find last assignment statement targets
+                for node in reversed(sanitized_tree.body):
+                    if isinstance(node, ast.Assign):
+                        for tgt in node.targets:
+                            if isinstance(tgt, ast.Name):
+                                last_assign_vars.append(tgt.id)
+                        if last_assign_vars:
+                            break
             except Exception:
                 last_expr_src = None
 
@@ -274,6 +284,13 @@ async def query(request: QueryRequest):
                 # Fallback: evaluate last expression or common variable names
                 fallback_t = time.perf_counter()
                 val: Optional[str] = None
+                candidates: List[str] = list(dict.fromkeys((last_assign_vars or []) + [
+                    "result", "ans", "answer", "x", "root", "roots", "solution", "sol", "y"
+                ]))
+                traces.append({
+                    "phase": "exec", "action": "fallback_prepare", "duration_ms": 0,
+                    "meta": {"has_last_expr": bool(last_expr_src), "last_assign_vars": last_assign_vars, "candidates": candidates}
+                })
                 if last_expr_src:
                     try:
                         def _eval_last() -> str:
@@ -291,7 +308,7 @@ async def query(request: QueryRequest):
                     except Exception:
                         val = None
                 if val is None:
-                    for candidate in ("result", "ans", "answer", "x"):
+                    for candidate in candidates:
                         try:
                             def _get_var() -> str:
                                 safe_builtins = {
@@ -311,6 +328,10 @@ async def query(request: QueryRequest):
                         except Exception:
                             pass
                 if val is None:
+                    traces.append({
+                        "phase": "exec", "action": "fallback_failed", "duration_ms": int((time.perf_counter()-fallback_t)*1000),
+                        "meta": {"reason": "no_stdout_and_no_value", "has_last_expr": bool(last_expr_src), "last_assign_vars": last_assign_vars}
+                    })
                     raise HTTPException(status_code=500, detail="Generated code produced no output.")
                 traces.append({
                     "phase": "exec", "action": "fallback_eval",
@@ -369,9 +390,17 @@ async def query(request: QueryRequest):
         return QueryResponse(query=request.query, response=response_text, model=MODEL_NAME, traces=traces)
 
     except HTTPException as e:
-        raise e
+        # Return traces on error for better observability
+        try:
+            return JSONResponse(status_code=e.status_code, content={"detail": e.detail, "traces": traces})
+        except Exception:
+            return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        # Include traces in generic errors as well
+        try:
+            return JSONResponse(status_code=500, content={"detail": f"Error: {str(e)}", "traces": traces})
+        except Exception:
+            return JSONResponse(status_code=500, content={"detail": f"Error: {str(e)}"})
 
 
 # Entry point for local development
