@@ -148,7 +148,7 @@ async def query(request: QueryRequest):
                             {"role": "user", "content": user}
                         ],
                         "temperature": max(0.0, min(request.temperature or 0.3, 0.7)),
-                        "max_tokens": 900,
+                        "max_tokens": 800,
                     },
                     headers={"Authorization": f"Bearer {gateway_key}", "Content-Type": "application/json"},
                     timeout=30.0,
